@@ -6,10 +6,13 @@ import (
 	"runtime/debug"
 
 	appconfigure "github.com/JirakLu/clock/internal/app/configure"
+	applog "github.com/JirakLu/clock/internal/app/log"
+	"github.com/JirakLu/clock/internal/app/recording"
 	"github.com/JirakLu/clock/internal/cli"
 	"github.com/JirakLu/clock/internal/config"
 	"github.com/JirakLu/clock/internal/credential"
 	"github.com/JirakLu/clock/internal/jira"
+	"time"
 )
 
 var (
@@ -33,20 +36,32 @@ func run() int {
 		os.Stderr,
 		cli.TerminalSecretReader{Input: os.Stdin},
 	)
+	jiraClient := jira.NewIdentityClient(nil)
+	credentials := credential.NewNativeStore()
+	configurations := config.NewStore(userConfigDir)
 	configureService := appconfigure.New(
-		jira.NewIdentityClient(nil),
+		jiraClient,
 		prompter,
-		credential.NewNativeStore(),
-		config.NewStore(userConfigDir),
+		credentials,
+		configurations,
+	)
+	logService := applog.New(
+		configurations,
+		credentials,
+		recording.New(jiraClient),
+		time.Now,
 	)
 	root := cli.NewRoot(cli.RootOptions{
 		Configure: configureService,
+		Log:       logService,
 		Prompter:  prompter,
 		In:        os.Stdin,
 		Out:       os.Stdout,
 		Err:       os.Stderr,
 		Version:   version,
 		Revision:  sourceRevision(),
+		Now:       time.Now,
+		Location:  time.Local,
 	})
 	return cli.Execute(root)
 }

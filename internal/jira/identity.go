@@ -83,19 +83,22 @@ func (c *IdentityClient) VerifyConfiguredIdentity(
 	configuration config.Configuration,
 	token secret.Token,
 ) error {
-	account, err := c.myself(
-		ctx,
-		configuration.JiraIdentity.CloudID,
-		configuration.JiraIdentity.Email,
-		token,
-	)
+	return c.verifyIdentity(ctx, configuration.JiraIdentity, token)
+}
+
+func (c *IdentityClient) verifyIdentity(
+	ctx context.Context,
+	identity jiraidentity.Reference,
+	token secret.Token,
+) error {
+	account, err := c.myself(ctx, identity.CloudID, identity.Email, token)
 	if err != nil {
 		return err
 	}
-	if account.AccountID != configuration.JiraIdentity.AccountID {
+	if account.AccountID != identity.AccountID {
 		return fmt.Errorf(
 			"Jira identity mismatch: configuration expects account %q but credentials authenticate account %q",
-			configuration.JiraIdentity.AccountID,
+			identity.AccountID,
 			account.AccountID,
 		)
 	}

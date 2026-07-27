@@ -2,17 +2,27 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	appconfigure "github.com/JirakLu/clock/internal/app/configure"
+	applog "github.com/JirakLu/clock/internal/app/log"
+	"github.com/JirakLu/clock/internal/app/recording"
 	"github.com/JirakLu/clock/internal/earnings"
 	"github.com/JirakLu/clock/internal/secret"
+	"github.com/JirakLu/clock/internal/worklog"
 	"github.com/spf13/cobra"
 )
 
 type ConfigureRunner interface {
 	Run(context.Context, appconfigure.Input) (appconfigure.Result, error)
+}
+
+type LogRunner interface {
+	Run(context.Context, applog.Input) (applog.Result, error)
 }
 
 type Prompter interface {
@@ -22,12 +32,15 @@ type Prompter interface {
 
 type RootOptions struct {
 	Configure ConfigureRunner
+	Log       LogRunner
 	Prompter  Prompter
 	In        io.Reader
 	Out       io.Writer
 	Err       io.Writer
 	Version   string
 	Revision  string
+	Now       func() time.Time
+	Location  *time.Location
 }
 
 func NewRoot(options RootOptions) *cobra.Command {
@@ -50,16 +63,165 @@ func NewRoot(options RootOptions) *cobra.Command {
 Configuration:
   clock configure
 
+Completed Worklogs:
+  clock log <issue> <duration> [--at <start>] [-d|--description <text>]
+  clock log <issue> --after-last [-d|--description <text>]
+
 Configuration validates the Jira Cloud site and authenticated identity before
 atomically saving non-secret settings. The API token is stored only in the
-secure native credential store.`,
+secure native credential store.
+
+Manual Duration accepts positive compact hours and minutes (30m, 2h, 2h30m).
+--at accepts today's HH:MM, local YYYY-MM-DDTHH:MM, or an offset-bearing
+YYYY-MM-DDTHH:MM+02:00. --after-last conflicts with Duration and --at.`,
 	}
 	root.SetVersionTemplate("clock {{.Version}}\n")
 	root.SetIn(options.In)
 	root.SetOut(options.Out)
 	root.SetErr(options.Err)
 	root.AddCommand(newConfigureCommand(options.Configure, options.Prompter))
+	root.AddCommand(newLogCommand(options))
 	return root
+}
+
+func newLogCommand(options RootOptions) *cobra.Command {
+	var (
+		at          string
+		afterLast   bool
+		description string
+	)
+	command := &cobra.Command{
+		Use:   "log <issue> [duration]",
+		Short: "Create one completed Jira Worklog",
+		Long: `Create one completed Jira Worklog.
+
+With a Duration, the Worklog ends now unless --at supplies its start.
+With --after-last, it starts after today's latest accessible authored Worklog
+and ends now. --after-last cannot be combined with a Duration or --at.
+
+Duration uses positive compact hours and minutes: 30m, 2h, or 2h30m.
+--at accepts today's HH:MM, local YYYY-MM-DDTHH:MM, or an offset-bearing
+YYYY-MM-DDTHH:MM+02:00. Ambiguous local daylight-saving times require an offset.`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(command *cobra.Command, args []string) error {
+			if options.Log == nil {
+				return errors.New("log command is unavailable")
+			}
+			issue, err := worklog.ParseIssueKey(args[0])
+			if err != nil {
+				return err
+			}
+			atSet := command.Flags().Changed("at")
+			if afterLast && atSet {
+				return errors.New("--after-last and --at cannot be used together")
+			}
+
+			timing := recording.Timing{}
+			if afterLast {
+				if len(args) == 2 {
+					return errors.New("--after-last does not accept a Duration")
+				}
+				timing.Mode = recording.AfterLast
+			} else {
+				if len(args) != 2 {
+					return errors.New("clock log requires a Duration unless --after-last is used")
+				}
+				duration, err := worklog.ParseCompactDuration(args[1])
+				if err != nil {
+					return err
+				}
+				timing = recording.Timing{Mode: recording.EndingNow, Duration: duration}
+				if atSet {
+					now := time.Now()
+					if options.Now != nil {
+						now = options.Now()
+					}
+					location := options.Location
+					if location == nil {
+						location = time.Local
+					}
+					start, err := parseMinuteTimestamp(at, now, location)
+					if err != nil {
+						return err
+					}
+					timing.Mode = recording.AtStart
+					timing.Start = start
+				}
+			}
+
+			result, err := options.Log.Run(command.Context(), applog.Input{
+				Issue: issue, Timing: timing, Description: description,
+			})
+			if err != nil {
+				return err
+			}
+			switch result.Status {
+			case recording.Submitted:
+				return renderCreatedWorklog(command.OutOrStdout(), result.Worklog)
+			case recording.Rejected, recording.Uncertain:
+				return renderWorklogFailure(result)
+			default:
+				return errors.New("log command returned an invalid result")
+			}
+		},
+	}
+	command.Flags().StringVar(&at, "at", "", "start at HH:MM or a minute-precise timestamp")
+	command.Flags().BoolVar(&afterLast, "after-last", false, "start after today's latest authored Worklog")
+	command.Flags().StringVarP(&description, "description", "d", "", "optional Worklog description")
+	return command
+}
+
+func renderCreatedWorklog(writer io.Writer, created worklog.Worklog) error {
+	duration, err := worklog.DurationFromSeconds(created.Interval.Seconds())
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(
+		writer,
+		"Created Worklog\nIssue: %s\nStart: %s\nEnd: %s\nDuration: %s\n",
+		created.Issue,
+		created.Interval.Start().Format(time.RFC3339),
+		created.Interval.End().Format(time.RFC3339),
+		duration,
+	); err != nil {
+		return err
+	}
+	if created.Description != "" {
+		_, err = fmt.Fprintf(writer, "Description: %s\n", created.Description)
+	}
+	return err
+}
+
+func renderWorklogFailure(result recording.Result) error {
+	duration, durationErr := worklog.DurationFromSeconds(result.Attempt.Interval.Seconds())
+	if durationErr != nil {
+		return durationErr
+	}
+	description := result.Attempt.Description
+	if description == "" {
+		description = "(none)"
+	}
+	classification := "Jira rejected Worklog creation"
+	guidance := "Use these facts to recover manually."
+	if result.Status == recording.Uncertain {
+		classification = "Jira Worklog creation had an uncertain outcome"
+		guidance = "Inspect Jira before retrying to avoid creating a duplicate Worklog."
+	}
+	cause := "unknown Jira failure"
+	if result.Cause != nil {
+		cause = result.Cause.Error()
+	}
+	return fmt.Errorf(
+		"%s: %s\nManual recovery facts:\nIssue: %s\nStart: %s\nEnd: %s\nDuration: %s\nDescription: %s\n%s",
+		classification,
+		strings.TrimSpace(cause),
+		result.Attempt.Issue,
+		result.Attempt.Interval.Start().Format(time.RFC3339),
+		result.Attempt.Interval.End().Format(time.RFC3339),
+		duration,
+		description,
+		guidance,
+	)
 }
 
 func Execute(root *cobra.Command) int {
