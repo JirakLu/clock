@@ -1,0 +1,46 @@
+{
+  "schema": "clock.report.v1",
+  "selector": {
+    "type": "preset",
+    "value": "today"
+  },
+  "window": {
+    "from": "2026-07-29T00:00:00+02:00",
+    "to": "2026-07-30T00:00:00+02:00",
+    "timezone": "Europe/Prague"
+  },
+  "contributions": [
+    {
+      "worklog_id": "10002",
+      "issue": {
+        "key": "CLOCK-16",
+        "summary": "Reports"
+      },
+      "description": "Build report output",
+      "from": "2026-07-29T09:00:00+02:00",
+      "to": "2026-07-29T10:30:00+02:00",
+      "seconds": 5400
+    },
+    {
+      "worklog_id": "10001",
+      "issue": {
+        "key": "OPS-42",
+        "summary": "Deploy API"
+      },
+      "from": "2026-07-29T10:00:00+02:00",
+      "to": "2026-07-29T10:45:00+02:00",
+      "seconds": 2700
+    }
+  ],
+  "daily_totals": [
+    {
+      "date": "2026-07-29",
+      "seconds": 8100,
+      "earnings_czk": "1687.50"
+    }
+  ],
+  "total": {
+    "seconds": 8100,
+    "earnings_czk": "1687.50"
+  }
+}

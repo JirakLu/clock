@@ -3,6 +3,7 @@ package earnings
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,21 @@ func (r HourlyRate) Halere() int64 {
 
 func (r HourlyRate) Valid() bool {
 	return r.quotedCZK != ""
+}
+
+func (r HourlyRate) FormatAggregate(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	roundedHalere := new(big.Int).Mul(
+		big.NewInt(seconds),
+		big.NewInt(r.halere),
+	)
+	roundedHalere.Add(roundedHalere, big.NewInt(1800))
+	roundedHalere.Quo(roundedHalere, big.NewInt(3600))
+	whole, fraction := new(big.Int), new(big.Int)
+	whole.QuoRem(roundedHalere, big.NewInt(100), fraction)
+	return fmt.Sprintf("%s.%02d", whole.String(), fraction.Int64())
 }
 
 func decimalDigits(value string) bool {

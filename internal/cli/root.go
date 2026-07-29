@@ -11,6 +11,7 @@ import (
 	appconfigure "github.com/JirakLu/clock/internal/app/configure"
 	applog "github.com/JirakLu/clock/internal/app/log"
 	"github.com/JirakLu/clock/internal/app/recording"
+	appreport "github.com/JirakLu/clock/internal/app/report"
 	"github.com/JirakLu/clock/internal/earnings"
 	"github.com/JirakLu/clock/internal/secret"
 	"github.com/JirakLu/clock/internal/worklog"
@@ -25,6 +26,10 @@ type LogRunner interface {
 	Run(context.Context, applog.Input) (applog.Result, error)
 }
 
+type ReportRunner interface {
+	Run(context.Context, appreport.Input) (appreport.Result, error)
+}
+
 type Prompter interface {
 	ReadLine(string) (string, error)
 	ReadSecret(string) (string, error)
@@ -33,6 +38,7 @@ type Prompter interface {
 type RootOptions struct {
 	Configure ConfigureRunner
 	Log       LogRunner
+	Report    ReportRunner
 	Prompter  Prompter
 	In        io.Reader
 	Out       io.Writer
@@ -67,6 +73,12 @@ Completed Worklogs:
   clock log <issue> <duration> [--at <start>] [-d|--description <text>]
   clock log <issue> --after-last [-d|--description <text>]
 
+Reports:
+  clock report today [--earnings] [--json]
+  clock report last-week [--earnings] [--json]
+  clock report last-month [--earnings] [--json]
+  clock report --from <bound> --to <bound> [--earnings] [--json]
+
 Configuration validates the Jira Cloud site and authenticated identity before
 atomically saving non-secret settings. The API token is stored only in the
 secure native credential store.
@@ -81,6 +93,7 @@ YYYY-MM-DDTHH:MM+02:00. --after-last conflicts with Duration and --at.`,
 	root.SetErr(options.Err)
 	root.AddCommand(newConfigureCommand(options.Configure, options.Prompter))
 	root.AddCommand(newLogCommand(options))
+	root.AddCommand(newReportCommand(options))
 	return root
 }
 

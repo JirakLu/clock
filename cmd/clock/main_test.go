@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+func TestMachineLocationResolvesAnIANATimezone(t *testing.T) {
+	t.Setenv("TZ", "Europe/Prague")
+
+	location, err := machineLocation()
+	if err != nil {
+		t.Fatalf("machineLocation() error = %v", err)
+	}
+	if got := location.String(); got != "Europe/Prague" {
+		t.Errorf("machineLocation() = %q, want Europe/Prague", got)
+	}
+}
+
 func TestCompiledBinaryReportsEmbeddedVersionAndHelp(t *testing.T) {
 	t.Parallel()
 

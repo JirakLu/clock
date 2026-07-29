@@ -43,6 +43,29 @@ func parseMinuteTimestamp(raw string, now time.Time, location *time.Location) (t
 	)
 }
 
+func parseReportBound(raw string, location *time.Location) (time.Time, error) {
+	if location == nil {
+		location = time.Local
+	}
+	if parsed, err := time.Parse("2006-01-02T15:04Z07:00", raw); err == nil {
+		return parsed, nil
+	}
+	if wall, err := time.Parse("2006-01-02", raw); err == nil {
+		return resolveLocalMinute(
+			wall.Year(), wall.Month(), wall.Day(), 0, 0, location,
+		)
+	}
+	if wall, err := time.Parse("2006-01-02T15:04", raw); err == nil {
+		return resolveLocalMinute(
+			wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), location,
+		)
+	}
+	return time.Time{}, fmt.Errorf(
+		`Report bound %q must be YYYY-MM-DD, YYYY-MM-DDTHH:MM, or YYYY-MM-DDTHH:MM+02:00`,
+		raw,
+	)
+}
+
 func resolveLocalMinute(
 	year int,
 	month time.Month,
