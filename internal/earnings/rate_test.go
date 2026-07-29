@@ -51,3 +51,22 @@ func TestParseHourlyRateRejectsInvalidAmounts(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatAggregateUsesExactSecondsAndHalfUpRounding(t *testing.T) {
+	t.Parallel()
+
+	rate, _ := earnings.ParseHourlyRate("750.00")
+	tests := []struct {
+		seconds int64
+		want    string
+	}{
+		{seconds: 0, want: "0.00"},
+		{seconds: 1, want: "0.21"},
+		{seconds: 33300, want: "6937.50"},
+	}
+	for _, test := range tests {
+		if got := rate.FormatAggregate(test.seconds); got != test.want {
+			t.Errorf("FormatAggregate(%d) = %q, want %q", test.seconds, got, test.want)
+		}
+	}
+}

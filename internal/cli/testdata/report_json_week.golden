@@ -1,0 +1,87 @@
+{
+  "schema": "clock.report.v1",
+  "selector": {
+    "type": "preset",
+    "value": "last_week"
+  },
+  "window": {
+    "from": "2026-10-19T00:00:00+02:00",
+    "to": "2026-10-26T00:00:00+01:00",
+    "timezone": "Europe/Prague"
+  },
+  "contributions": [
+    {
+      "worklog_id": "10003",
+      "issue": {
+        "key": "CLOCK-16",
+        "summary": "Reports"
+      },
+      "description": "Across midnight",
+      "from": "2026-10-22T23:30:00+02:00",
+      "to": "2026-10-23T00:00:00+02:00",
+      "seconds": 1800
+    },
+    {
+      "worklog_id": "10003",
+      "issue": {
+        "key": "CLOCK-16",
+        "summary": "Reports"
+      },
+      "description": "Across midnight",
+      "from": "2026-10-23T00:00:00+02:00",
+      "to": "2026-10-23T00:30:00+02:00",
+      "seconds": 1800
+    },
+    {
+      "worklog_id": "10004",
+      "issue": {
+        "key": "OPS-42",
+        "summary": "DST deployment"
+      },
+      "from": "2026-10-25T00:00:00+02:00",
+      "to": "2026-10-26T00:00:00+01:00",
+      "seconds": 90000
+    }
+  ],
+  "daily_totals": [
+    {
+      "date": "2026-10-19",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-10-20",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-10-21",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-10-22",
+      "seconds": 1800,
+      "earnings_czk": "375.00"
+    },
+    {
+      "date": "2026-10-23",
+      "seconds": 1800,
+      "earnings_czk": "375.00"
+    },
+    {
+      "date": "2026-10-24",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-10-25",
+      "seconds": 90000,
+      "earnings_czk": "18750.00"
+    }
+  ],
+  "total": {
+    "seconds": 93600,
+    "earnings_czk": "19500.00"
+  }
+}

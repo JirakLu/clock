@@ -33,3 +33,18 @@ Non-secret settings are atomically stored in the platform configuration
 directory at `clock/config.toml`. The API token is stored only in macOS Keychain
 or Linux Secret Service, bound to the validated Cloud ID and Jira account ID.
 There is no command-line, environment-variable, or plaintext-file token fallback.
+
+## Report
+
+```text
+clock report today [--earnings] [--json]
+clock report last-week [--earnings] [--json]
+clock report last-month [--earnings] [--json]
+clock report --from <bound> --to <bound> [--earnings] [--json]
+```
+
+Reports include accessible Worklogs authored by the configured Jira identity.
+Explicit bounds form a half-open `[from, to)` window and accept a local date,
+local minute-precise timestamp, or offset-bearing minute-precise timestamp.
+Terminal detail decreases from daily timelines to weekly ledgers and monthly
+aggregates; `--json` always emits the fully detailed `clock.report.v1` contract.
