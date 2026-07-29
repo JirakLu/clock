@@ -3,8 +3,11 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +126,13 @@ func TestReportGoldenFixtures(t *testing.T) {
 		{name: "json_day", args: []string{"report", "today", "--earnings", "--json"}},
 		{name: "json_week", args: []string{"report", "last-week", "--earnings", "--json"}},
 		{name: "json_month", args: []string{"report", "last-month", "--earnings", "--json"}},
+		{
+			name: "json_explicit",
+			args: []string{
+				"report", "--from", "2026-07-01", "--to", "2026-07-04",
+				"--earnings", "--json",
+			},
+		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -131,6 +141,7 @@ func TestReportGoldenFixtures(t *testing.T) {
 				"day": report.Today, "week": report.LastWeek,
 				"month": report.LastMonth, "json_day": report.Today,
 				"json_week": report.LastWeek, "json_month": report.LastMonth,
+				"json_explicit": report.Explicit,
 			}[test.name]
 			runner := &fakeReportRunner{result: goldenReportResult(t, selector, prague)}
 			var stdout, stderr bytes.Buffer
@@ -171,6 +182,60 @@ func TestReportJSONOmitsUnrequestedEarningsAndAbsentDescription(t *testing.T) {
 	if strings.Contains(stdout.String(), `"description"`) ||
 		strings.Contains(stdout.String(), `"earnings_czk"`) {
 		t.Errorf("optional fields were not omitted: %s", stdout.String())
+	}
+}
+
+func TestReportJSONV1DTOContract(t *testing.T) {
+	t.Parallel()
+
+	prague, _ := time.LoadLocation("Europe/Prague")
+	runner := &fakeReportRunner{result: goldenReportResult(t, report.Explicit, prague)}
+	var stdout, stderr bytes.Buffer
+	root := cli.NewRoot(cli.RootOptions{
+		Report: runner, Out: &stdout, Err: &stderr, Location: prague,
+	})
+	root.SetArgs([]string{
+		"report", "--from", "2026-07-01", "--to", "2026-07-04",
+		"--earnings", "--json",
+	})
+	if exitCode := cli.Execute(root); exitCode != 0 {
+		t.Fatalf("Execute() exit = %d, stderr = %s", exitCode, stderr.String())
+	}
+
+	decoder := json.NewDecoder(&stdout)
+	decoder.DisallowUnknownFields()
+	var document reportJSONV1
+	if err := decoder.Decode(&document); err != nil {
+		t.Fatalf("decode clock.report.v1: %v", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatalf("clock.report.v1 has trailing JSON: %v", err)
+	}
+
+	if document.Schema != "clock.report.v1" ||
+		document.Selector != (selectorJSONV1{Type: "explicit", Value: "explicit"}) {
+		t.Errorf("identity = schema %q, selector %#v", document.Schema, document.Selector)
+	}
+	if document.Window.Timezone != "Europe/Prague" {
+		t.Errorf("timezone = %q", document.Window.Timezone)
+	}
+	for _, bound := range []string{document.Window.From, document.Window.To} {
+		if _, err := time.Parse(time.RFC3339, bound); err != nil {
+			t.Errorf("window bound %q is not offset-bearing RFC 3339: %v", bound, err)
+		}
+	}
+	if len(document.Contributions) != 2 ||
+		document.Contributions[0].WorklogID != document.Contributions[1].WorklogID {
+		t.Errorf("split contributions = %#v", document.Contributions)
+	}
+	if len(document.DailyTotals) != 3 || document.Total.Seconds != 2 {
+		t.Errorf("aggregates = daily %#v, total %#v", document.DailyTotals, document.Total)
+	}
+	money := regexp.MustCompile(`^[0-9]+\.[0-9]{2}$`)
+	for _, aggregate := range append(document.DailyTotals, document.Total) {
+		if !money.MatchString(aggregate.EarningsCZK) {
+			t.Errorf("earnings_czk = %q, want a two-decimal string", aggregate.EarningsCZK)
+		}
 	}
 }
 
@@ -241,12 +306,26 @@ func goldenReportResult(t *testing.T, selector report.Selector, location *time.L
 				from.AddDate(0, 0, 1).Add(9*time.Hour),
 				from.AddDate(0, 0, 1).Add(10*time.Hour+30*time.Minute)),
 		}
+	case report.Explicit:
+		from = time.Date(2026, time.July, 1, 0, 0, 0, 0, location)
+		to = time.Date(2026, time.July, 4, 0, 0, 0, 0, location)
+		source = []worklog.Worklog{
+			reportWorklog(
+				t, "10006", "CLOCK-17", "Stable JSON", "Cross local midnight",
+				time.Date(2026, time.July, 1, 23, 59, 59, 0, location),
+				time.Date(2026, time.July, 2, 0, 0, 1, 0, location),
+			),
+		}
 	}
 	window, _ := report.NewWindow(selector, from, to, location)
+	rate := "750.00"
+	if selector == report.Explicit {
+		rate = "18.00"
+	}
 	return appreport.Result{
 		Report:          report.Build(window, source),
 		IncludeEarnings: true,
-		HourlyRate:      mustRate(t, "750.00"),
+		HourlyRate:      mustRate(t, rate),
 	}
 }
 
@@ -289,4 +368,44 @@ func (f *fakeReportRunner) Run(_ context.Context, input appreport.Input) (apprep
 	f.calls++
 	f.input = input
 	return f.result, f.err
+}
+
+type reportJSONV1 struct {
+	Schema        string               `json:"schema"`
+	Selector      selectorJSONV1       `json:"selector"`
+	Window        windowJSONV1         `json:"window"`
+	Contributions []contributionJSONV1 `json:"contributions"`
+	DailyTotals   []aggregateJSONV1    `json:"daily_totals"`
+	Total         aggregateJSONV1      `json:"total"`
+}
+
+type selectorJSONV1 struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type windowJSONV1 struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Timezone string `json:"timezone"`
+}
+
+type contributionJSONV1 struct {
+	WorklogID   string      `json:"worklog_id"`
+	Issue       issueJSONV1 `json:"issue"`
+	Description string      `json:"description,omitempty"`
+	From        string      `json:"from"`
+	To          string      `json:"to"`
+	Seconds     int64       `json:"seconds"`
+}
+
+type issueJSONV1 struct {
+	Key     string `json:"key"`
+	Summary string `json:"summary"`
+}
+
+type aggregateJSONV1 struct {
+	Date        string `json:"date,omitempty"`
+	Seconds     int64  `json:"seconds"`
+	EarningsCZK string `json:"earnings_czk,omitempty"`
 }

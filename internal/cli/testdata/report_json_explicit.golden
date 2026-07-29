@@ -1,0 +1,57 @@
+{
+  "schema": "clock.report.v1",
+  "selector": {
+    "type": "explicit",
+    "value": "explicit"
+  },
+  "window": {
+    "from": "2026-07-01T00:00:00+02:00",
+    "to": "2026-07-04T00:00:00+02:00",
+    "timezone": "Europe/Prague"
+  },
+  "contributions": [
+    {
+      "worklog_id": "10006",
+      "issue": {
+        "key": "CLOCK-17",
+        "summary": "Stable JSON"
+      },
+      "description": "Cross local midnight",
+      "from": "2026-07-01T23:59:59+02:00",
+      "to": "2026-07-02T00:00:00+02:00",
+      "seconds": 1
+    },
+    {
+      "worklog_id": "10006",
+      "issue": {
+        "key": "CLOCK-17",
+        "summary": "Stable JSON"
+      },
+      "description": "Cross local midnight",
+      "from": "2026-07-02T00:00:00+02:00",
+      "to": "2026-07-02T00:00:01+02:00",
+      "seconds": 1
+    }
+  ],
+  "daily_totals": [
+    {
+      "date": "2026-07-01",
+      "seconds": 1,
+      "earnings_czk": "0.01"
+    },
+    {
+      "date": "2026-07-02",
+      "seconds": 1,
+      "earnings_czk": "0.01"
+    },
+    {
+      "date": "2026-07-03",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    }
+  ],
+  "total": {
+    "seconds": 2,
+    "earnings_czk": "0.01"
+  }
+}
