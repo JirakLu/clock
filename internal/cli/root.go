@@ -36,7 +36,7 @@ type TimerRunner interface {
 	Start(context.Context, apptimer.StartInput) (apptimer.StartResult, error)
 	Status() (apptimer.StatusResult, error)
 	Stop(context.Context, apptimer.StopInput) (apptimer.StopResult, error)
-	Discard() (apptimer.DiscardResult, error)
+	Discard(apptimer.DiscardInput) (apptimer.DiscardResult, error)
 }
 
 type Prompter interface {
@@ -93,7 +93,7 @@ Running timer:
   clock start <issue> [--at <start> | --after-last] [-d|--description <text>]
   clock status
   clock stop [--at <stop>] [-d|--description <text>]
-  clock discard
+  clock discard [--force]
 
 Configuration validates the Jira Cloud site and authenticated identity before
 atomically saving non-secret settings. The API token is stored only in the
@@ -149,6 +149,7 @@ func newStartCommand(options RootOptions) *cobra.Command {
 			if err != nil {
 				var active *apptimer.AlreadyRunningError
 				if errors.As(err, &active) {
+					renderWarnings(command.ErrOrStderr(), active.Warnings)
 					return fmt.Errorf("%w\n%s\nUse clock stop to create a Worklog or clock discard to abandon it", err, renderTimerFacts(active.Timer, optionsNow(options)))
 				}
 				return err
@@ -177,6 +178,7 @@ func newStatusCommand(options RootOptions) *cobra.Command {
 				_, err = fmt.Fprintln(command.OutOrStdout(), "No Running timer.")
 				return err
 			}
+			renderWarnings(command.ErrOrStderr(), result.Warnings)
 			if result.IdentityMismatch {
 				_, _ = fmt.Fprintln(command.ErrOrStderr(), "Warning: Running timer belongs to a different configured Jira identity; clock stop will refuse submission.")
 			}
@@ -205,6 +207,7 @@ func newStopCommand(options RootOptions) *cobra.Command {
 				}
 			}
 			result, err := options.Timer.Stop(command.Context(), apptimer.StopInput{StopAt: stopAt, Description: description, DescriptionOverride: command.Flags().Changed("description")})
+			renderWarnings(command.ErrOrStderr(), result.Warnings)
 			if err != nil {
 				return err
 			}
@@ -212,7 +215,7 @@ func newStopCommand(options RootOptions) *cobra.Command {
 			case recording.Submitted:
 				return renderCreatedWorklog(command.OutOrStdout(), result.Worklog)
 			case recording.Rejected, recording.Uncertain:
-				return renderWorklogFailure(result)
+				return renderWorklogFailure(result.Result)
 			default:
 				return errors.New("stop command returned an invalid result")
 			}
@@ -223,19 +226,43 @@ func newStopCommand(options RootOptions) *cobra.Command {
 }
 
 func newDiscardCommand(options RootOptions) *cobra.Command {
+	var force bool
 	command := &cobra.Command{Use: "discard", Short: "Discard Running timer state without contacting Jira", Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if options.Timer == nil {
 				return errors.New("discard command is unavailable")
 			}
-			result, err := options.Timer.Discard()
+			result, err := options.Timer.Discard(apptimer.DiscardInput{Force: force})
+			renderWarnings(command.ErrOrStderr(), result.Warnings)
+			if result.Forced {
+				for _, path := range result.Removed {
+					if _, writeErr := fmt.Fprintf(command.OutOrStdout(), "Removed Running timer artifact: %s\n", path); writeErr != nil {
+						return writeErr
+					}
+				}
+				if _, writeErr := fmt.Fprintln(command.OutOrStdout(), "No Jira Worklog was created."); writeErr != nil {
+					return writeErr
+				}
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(command.OutOrStdout(), "Forced discard completed.")
+				return err
+			}
 			if err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(command.OutOrStdout(), "Discarded Running timer\n%s\nNo Jira Worklog was created.\n", renderTimerFacts(result.Timer, optionsNow(options)))
 			return err
 		}}
+	command.Flags().BoolVar(&force, "force", false, "remove invalid canonical and staging Running timer state")
 	return command
+}
+
+func renderWarnings(writer io.Writer, warnings []string) {
+	for _, warning := range warnings {
+		_, _ = fmt.Fprintln(writer, warning)
+	}
 }
 
 func optionTime(options RootOptions) (time.Time, *time.Location) {
