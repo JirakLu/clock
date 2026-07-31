@@ -165,7 +165,7 @@ func TestDiscardRemovesValidTimerWithoutLoadingJiraConfiguration(t *testing.T) {
 	active := testTimer(now.Add(-time.Hour))
 	state := &fakeState{inspection: runningtimer.Inspection{Timer: active}}
 	service := apptimer.New(fakeConfig{err: errors.New("must not load")}, fakeCredentials{}, state, &fakeRecorder{}, func() time.Time { return now })
-	result, err := service.Discard()
+	result, err := service.Discard(apptimer.DiscardInput{})
 	if err != nil || result.Timer.Issue != active.Issue || state.discardCalls != 1 {
 		t.Fatalf("Discard() = %#v, %v; state %#v", result, err, state)
 	}
@@ -236,6 +236,9 @@ func (f *fakeState) Consume(runningtimer.Timer, time.Time) error {
 	return f.consumeErr
 }
 func (f *fakeState) Discard(runningtimer.Timer, time.Time) error { f.discardCalls++; return nil }
+func (f *fakeState) ForceDiscard(time.Time) (runningtimer.ForceDiscardResult, error) {
+	return runningtimer.ForceDiscardResult{}, nil
+}
 
 type fakeRecorder struct {
 	resolvedStart time.Time

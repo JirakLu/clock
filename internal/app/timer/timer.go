@@ -30,6 +30,7 @@ type StatusResult struct {
 	Timer            runningtimer.Timer
 	ElapsedSeconds   int64
 	IdentityMismatch bool
+	Warnings         []string
 }
 
 type StopInput struct {
@@ -38,14 +39,25 @@ type StopInput struct {
 	DescriptionOverride bool
 }
 
-type StopResult = recording.Result
+type StopResult struct {
+	recording.Result
+	Warnings []string
+}
+
+type DiscardInput struct {
+	Force bool
+}
 
 type DiscardResult struct {
-	Timer runningtimer.Timer
+	Timer    runningtimer.Timer
+	Forced   bool
+	Removed  []string
+	Warnings []string
 }
 
 type AlreadyRunningError struct {
-	Timer runningtimer.Timer
+	Timer    runningtimer.Timer
+	Warnings []string
 }
 
 func (e *AlreadyRunningError) Error() string { return "a Running timer is already active" }
@@ -63,6 +75,7 @@ type StateStore interface {
 	Create(runningtimer.Timer, time.Time) error
 	Consume(runningtimer.Timer, time.Time) error
 	Discard(runningtimer.Timer, time.Time) error
+	ForceDiscard(time.Time) (runningtimer.ForceDiscardResult, error)
 }
 
 type Recorder interface {
@@ -93,7 +106,7 @@ func (s *Service) Start(ctx context.Context, input StartInput) (StartResult, err
 	now := s.now()
 	inspection, err := s.state.Inspect(now)
 	if err == nil {
-		return StartResult{}, &AlreadyRunningError{Timer: inspection.Timer}
+		return StartResult{}, &AlreadyRunningError{Timer: inspection.Timer, Warnings: inspection.Warnings}
 	}
 	if !errors.Is(err, runningtimer.ErrNoTimer) {
 		return StartResult{}, err
@@ -115,7 +128,7 @@ func (s *Service) Start(ctx context.Context, input StartInput) (StartResult, err
 		// inspection. Re-read so the caller still receives the active timer and
 		// the required stop/discard guidance instead of a generic filesystem error.
 		if active, inspectErr := s.state.Inspect(now); inspectErr == nil {
-			return StartResult{}, &AlreadyRunningError{Timer: active.Timer}
+			return StartResult{}, &AlreadyRunningError{Timer: active.Timer, Warnings: active.Warnings}
 		}
 		return StartResult{}, fmt.Errorf("create Running timer: %w", err)
 	}
@@ -149,6 +162,7 @@ func (s *Service) Status() (StatusResult, error) {
 		Active: true, Timer: inspection.Timer, ElapsedSeconds: elapsed,
 		IdentityMismatch: inspection.Timer.CloudID != configuration.JiraIdentity.CloudID ||
 			inspection.Timer.AccountID != configuration.JiraIdentity.AccountID,
+		Warnings: inspection.Warnings,
 	}, nil
 }
 
@@ -166,23 +180,23 @@ func (s *Service) Stop(ctx context.Context, input StopInput) (StopResult, error)
 		stopAt = now
 	}
 	if stopAt.After(now) {
-		return StopResult{}, errors.New("Running timer stop must not be in the future")
+		return StopResult{Warnings: inspection.Warnings}, errors.New("Running timer stop must not be in the future")
 	}
 	seconds := int64(stopAt.Sub(inspection.Timer.StartedAt) / time.Second)
 	duration, err := worklog.DurationFromSeconds(seconds)
 	if err != nil {
-		return StopResult{}, recording.ErrNonPositiveWorklog
+		return StopResult{Warnings: inspection.Warnings}, recording.ErrNonPositiveWorklog
 	}
 	configuration, err := s.loadConfiguration()
 	if err != nil {
-		return StopResult{}, err
+		return StopResult{Warnings: inspection.Warnings}, err
 	}
 	if inspection.Timer.CloudID != configuration.JiraIdentity.CloudID || inspection.Timer.AccountID != configuration.JiraIdentity.AccountID {
-		return StopResult{}, errors.New("Running timer belongs to a different Jira Cloud ID or account ID; discard it or restore the original configuration")
+		return StopResult{Warnings: inspection.Warnings}, errors.New("Running timer belongs to a different Jira Cloud ID or account ID; discard it or restore the original configuration")
 	}
 	auth, err := s.authFor(configuration)
 	if err != nil {
-		return StopResult{}, err
+		return StopResult{Warnings: inspection.Warnings}, err
 	}
 	description := inspection.Timer.Description
 	if input.DescriptionOverride {
@@ -194,21 +208,25 @@ func (s *Service) Stop(ctx context.Context, input StopInput) (StopResult, error)
 		Description: description,
 	}, now)
 	if err != nil {
-		return StopResult{}, err
+		return StopResult{Warnings: inspection.Warnings}, err
 	}
 	if err := s.state.Consume(inspection.Timer, now); err != nil {
-		return StopResult{}, fmt.Errorf("consume Running timer before Jira submission: %w", err)
+		return StopResult{Warnings: inspection.Warnings}, fmt.Errorf("consume Running timer before Jira submission: %w", err)
 	}
 	result := s.recorder.Submit(ctx, auth, draft)
 	result.Attempt = draft
-	return result, nil
+	return StopResult{Result: result, Warnings: inspection.Warnings}, nil
 }
 
-func (s *Service) Discard() (DiscardResult, error) {
+func (s *Service) Discard(input DiscardInput) (DiscardResult, error) {
 	if s.state == nil {
 		return DiscardResult{}, errors.New("Running timer capability is unavailable")
 	}
 	now := s.now()
+	if input.Force {
+		result, err := s.state.ForceDiscard(now)
+		return DiscardResult{Forced: true, Removed: result.Removed}, err
+	}
 	inspection, err := s.state.Inspect(now)
 	if err != nil {
 		return DiscardResult{}, err
@@ -216,7 +234,7 @@ func (s *Service) Discard() (DiscardResult, error) {
 	if err := s.state.Discard(inspection.Timer, now); err != nil {
 		return DiscardResult{}, err
 	}
-	return DiscardResult{Timer: inspection.Timer}, nil
+	return DiscardResult{Timer: inspection.Timer, Warnings: inspection.Warnings}, nil
 }
 
 func (s *Service) loadAuth() (recording.Auth, error) {
