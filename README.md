@@ -55,9 +55,15 @@ aggregates; `--json` always emits the fully detailed `clock.report.v1` contract.
 clock start <issue> [--at <start> | --after-last] [-d|--description <text>]
 clock status
 clock stop [--at <stop>] [-d|--description <text>]
-clock discard
+clock discard [--force]
 ```
 
 One identity-bound Running timer is stored locally at a time. Stopping validates
 authored-Worklog overlap again, consumes local state before Jira submission, and
 preserves exact elapsed whole seconds. Discard never contacts Jira.
+
+Invalid or incomplete local timer state fails closed and reports its path,
+reason, and recovery command. `clock discard --force` removes invalid canonical
+and staging artifacts without contacting Jira; it refuses to remove valid
+Running timer state. A valid Running timer never expires because of its age or
+file modification time.

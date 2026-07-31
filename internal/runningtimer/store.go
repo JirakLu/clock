@@ -27,19 +27,37 @@ type Timer struct {
 }
 
 type Inspection struct {
-	Timer Timer
+	Timer    Timer
+	Warnings []string
+}
+
+type ForceDiscardResult struct {
+	Removed []string
+}
+
+type StoreOptions struct {
+	Remove func(string) error
 }
 
 type Store struct {
 	path        string
 	stagingPath string
 	lockPath    string
+	remove      func(string) error
 }
 
 func NewStore(userConfigDir string) *Store {
+	return NewStoreWithOptions(userConfigDir, StoreOptions{})
+}
+
+func NewStoreWithOptions(userConfigDir string, options StoreOptions) *Store {
 	path := filepath.Join(userConfigDir, "clock", "state.json")
+	remove := options.Remove
+	if remove == nil {
+		remove = os.Remove
+	}
 	return &Store{
-		path: path, stagingPath: path + ".staging", lockPath: path + ".lock",
+		path: path, stagingPath: path + ".staging", lockPath: path + ".lock", remove: remove,
 	}
 }
 
@@ -80,6 +98,83 @@ func (s *Store) Discard(expected Timer, now time.Time) error {
 	return s.removeValid(expected, now, "discard")
 }
 
+func (s *Store) ForceDiscard(now time.Time) (ForceDiscardResult, error) {
+	var result ForceDiscardResult
+	err := s.withLock(func() error {
+		canonicalExists, err := artifactExists(s.path)
+		if err != nil {
+			return fmt.Errorf("inspect Running timer state %q before forced discard: %w", s.path, err)
+		}
+		stagingExists, err := artifactExists(s.stagingPath)
+		if err != nil {
+			return fmt.Errorf("inspect Running timer staging state %q before forced discard: %w", s.stagingPath, err)
+		}
+		if !canonicalExists && !stagingExists {
+			return errors.New("no Running timer state artifacts exist to force-discard")
+		}
+		if canonicalExists {
+			if _, validationErr := s.readCanonical(now); validationErr == nil {
+				if stagingExists {
+					if err := s.remove(s.stagingPath); err != nil {
+						return fmt.Errorf("forced discard incomplete: remove orphan Running timer staging artifact %q: %w", s.stagingPath, err)
+					}
+					result.Removed = append(result.Removed, s.stagingPath)
+					_ = syncDirectory(filepath.Dir(s.path))
+				}
+				return errors.New("Running timer state is valid; use clock discard without --force")
+			}
+		}
+
+		var removalErrors []error
+		for _, artifact := range []struct {
+			path   string
+			exists bool
+		}{
+			{path: s.path, exists: canonicalExists},
+			{path: s.stagingPath, exists: stagingExists},
+		} {
+			if !artifact.exists {
+				continue
+			}
+			if err := s.remove(artifact.path); err != nil {
+				removalErrors = append(removalErrors, fmt.Errorf("remove Running timer artifact %q: %w", artifact.path, err))
+				continue
+			}
+			result.Removed = append(result.Removed, artifact.path)
+		}
+		if len(result.Removed) > 0 {
+			_ = syncDirectory(filepath.Dir(s.path))
+		}
+		if len(removalErrors) > 0 {
+			return fmt.Errorf("forced discard incomplete: %w", errors.Join(removalErrors...))
+		}
+		return nil
+	})
+	return result, err
+}
+
+func (s *Store) readCanonical(now time.Time) (Timer, error) {
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return Timer{}, fmt.Errorf("inspect Running timer state artifact %q: %w", s.path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return Timer{}, fmt.Errorf("invalid Running timer state %q: artifact must be a regular file", s.path)
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return Timer{}, fmt.Errorf("read Running timer state %q: %w", s.path, err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		return Timer{}, fmt.Errorf("invalid Running timer state %q: permissions are %o, want 600", s.path, info.Mode().Perm())
+	}
+	timer, err := decodeTimer(data, now)
+	if err != nil {
+		return Timer{}, fmt.Errorf("invalid Running timer state %q: %w", s.path, err)
+	}
+	return timer, nil
+}
+
 func (s *Store) removeValid(expected Timer, now time.Time, operation string) error {
 	return s.withLock(func() error {
 		inspection, err := s.inspectLocked(now)
@@ -89,7 +184,7 @@ func (s *Store) removeValid(expected Timer, now time.Time, operation string) err
 		if !timersEqual(inspection.Timer, expected) {
 			return fmt.Errorf("Running timer changed while attempting to %s it", operation)
 		}
-		if err := os.Remove(s.path); err != nil {
+		if err := s.remove(s.path); err != nil {
 			return fmt.Errorf("%s Running timer state %q: %w", operation, s.path, err)
 		}
 		// Removal is the commit point. A later directory-sync failure must not be
@@ -106,30 +201,41 @@ func timersEqual(left, right Timer) bool {
 }
 
 func (s *Store) inspectLocked(now time.Time) (Inspection, error) {
-	stagingExists, err := exists(s.stagingPath)
+	canonicalExists, err := artifactExists(s.path)
 	if err != nil {
-		return Inspection{}, fmt.Errorf("inspect Running timer staging state %q: %w", s.stagingPath, err)
+		return Inspection{}, recoveryError(fmt.Errorf("inspect Running timer state artifact %q: %w", s.path, err))
 	}
-	if stagingExists {
-		return Inspection{}, fmt.Errorf("incomplete atomic Running timer write at %q", s.stagingPath)
-	}
-	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
+	if !canonicalExists {
+		stagingExists, stagingErr := artifactExists(s.stagingPath)
+		if stagingErr != nil {
+			return Inspection{}, recoveryError(fmt.Errorf("inspect Running timer staging state %q: %w", s.stagingPath, stagingErr))
+		}
+		if stagingExists {
+			return Inspection{}, recoveryError(fmt.Errorf("incomplete atomic Running timer write at %q", s.stagingPath))
+		}
 		return Inspection{}, ErrNoTimer
 	}
+	timer, err := s.readCanonical(now)
 	if err != nil {
-		return Inspection{}, fmt.Errorf("read Running timer state %q: %w", s.path, err)
+		return Inspection{}, recoveryError(err)
 	}
-	if info, err := os.Stat(s.path); err != nil {
-		return Inspection{}, fmt.Errorf("inspect Running timer state %q: %w", s.path, err)
-	} else if info.Mode().Perm() != 0o600 {
-		return Inspection{}, fmt.Errorf("invalid Running timer state %q: permissions are %o, want 600", s.path, info.Mode().Perm())
-	}
-	timer, err := decodeTimer(data, now)
+	inspection := Inspection{Timer: timer}
+	stagingExists, err := artifactExists(s.stagingPath)
 	if err != nil {
-		return Inspection{}, fmt.Errorf("invalid Running timer state %q: %w", s.path, err)
+		return Inspection{}, recoveryError(fmt.Errorf("inspect Running timer staging state %q: %w", s.stagingPath, err))
 	}
-	return Inspection{Timer: timer}, nil
+	if stagingExists {
+		if err := s.remove(s.stagingPath); err != nil {
+			return Inspection{}, recoveryError(fmt.Errorf("remove orphan Running timer staging state %q: %w", s.stagingPath, err))
+		}
+		_ = syncDirectory(filepath.Dir(s.stagingPath))
+		inspection.Warnings = append(inspection.Warnings, fmt.Sprintf("Warning: removed orphan Running timer staging state %q; canonical state remains active.", s.stagingPath))
+	}
+	return inspection, nil
+}
+
+func recoveryError(err error) error {
+	return fmt.Errorf("%w\nRun clock discard --force to remove invalid Running timer state.", err)
 }
 
 func (s *Store) writeLocked(timer Timer) error {
@@ -325,8 +431,8 @@ func validateTimer(timer Timer, now time.Time) error {
 	return nil
 }
 
-func exists(path string) (bool, error) {
-	_, err := os.Stat(path)
+func artifactExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
 	if err == nil {
 		return true, nil
 	}
