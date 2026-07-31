@@ -11,10 +11,11 @@ import (
 	applog "github.com/JirakLu/clock/internal/app/log"
 	"github.com/JirakLu/clock/internal/app/recording"
 	appreport "github.com/JirakLu/clock/internal/app/report"
+	apptimer "github.com/JirakLu/clock/internal/app/timer"
 	"github.com/JirakLu/clock/internal/cli"
 	"github.com/JirakLu/clock/internal/config"
 	"github.com/JirakLu/clock/internal/credential"
-	"github.com/JirakLu/clock/internal/jira"
+	"github.com/JirakLu/clock/internal/runningtimer"
 	"time"
 )
 
@@ -44,7 +45,7 @@ func run() int {
 		os.Stderr,
 		cli.TerminalSecretReader{Input: os.Stdin},
 	)
-	jiraClient := jira.NewIdentityClient(nil)
+	jiraClient := newJiraIdentityClient()
 	credentials := credential.NewNativeStore()
 	configurations := config.NewStore(userConfigDir)
 	configureService := appconfigure.New(
@@ -66,10 +67,19 @@ func run() int {
 		time.Now,
 		location,
 	)
+	timerState := runningtimer.NewStore(userConfigDir)
+	timerService := apptimer.New(
+		configurations,
+		credentials,
+		timerState,
+		recording.New(jiraClient),
+		time.Now,
+	)
 	root := cli.NewRoot(cli.RootOptions{
 		Configure: configureService,
 		Log:       logService,
 		Report:    reportService,
+		Timer:     timerService,
 		Prompter:  prompter,
 		In:        os.Stdin,
 		Out:       os.Stdout,

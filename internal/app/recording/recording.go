@@ -87,22 +87,35 @@ func (s *Service) Record(
 	request Request,
 	now time.Time,
 ) (Result, error) {
+	draft, err := s.Prepare(ctx, auth, request, now)
+	if err != nil {
+		return Result{}, err
+	}
+	return s.Submit(ctx, auth, draft), nil
+}
+
+func (s *Service) Prepare(
+	ctx context.Context,
+	auth Auth,
+	request Request,
+	now time.Time,
+) (worklog.Draft, error) {
 	if s.gateway == nil {
-		return Result{}, errors.New("Jira recording capability is unavailable")
+		return worklog.Draft{}, errors.New("Jira recording capability is unavailable")
 	}
 	if err := s.gateway.VerifyIdentity(ctx, auth); err != nil {
-		return Result{}, fmt.Errorf("verify configured Jira identity: %w", err)
+		return worklog.Draft{}, fmt.Errorf("verify configured Jira identity: %w", err)
 	}
 
 	draft, existing, err := s.resolveDraft(ctx, auth, request, now)
 	if err != nil {
-		return Result{}, err
+		return worklog.Draft{}, err
 	}
 	if draft.Interval.End().After(now) {
-		return Result{}, ErrFutureWorklog
+		return worklog.Draft{}, ErrFutureWorklog
 	}
 	if draft.Interval.Seconds() <= 0 {
-		return Result{}, ErrNonPositiveWorklog
+		return worklog.Draft{}, ErrNonPositiveWorklog
 	}
 	if existing == nil {
 		existing, err = s.gateway.ListAuthoredWorklogs(
@@ -112,21 +125,16 @@ func (s *Service) Record(
 			draft.Interval.End(),
 		)
 		if err != nil {
-			return Result{}, fmt.Errorf("check authored Worklog overlap: %w", err)
+			return worklog.Draft{}, fmt.Errorf("check authored Worklog overlap: %w", err)
 		}
 	}
-	for _, candidate := range existing {
-		if draft.Interval.Overlaps(candidate.Interval) {
-			return Result{}, fmt.Errorf(
-				"%w %q from %s to %s",
-				ErrOverlap,
-				candidate.ID,
-				candidate.Interval.Start().Format(time.RFC3339),
-				candidate.Interval.End().Format(time.RFC3339),
-			)
-		}
+	if err := validateNoOverlap(draft.Interval, existing); err != nil {
+		return worklog.Draft{}, err
 	}
+	return draft, nil
+}
 
+func (s *Service) Submit(ctx context.Context, auth Auth, draft worklog.Draft) Result {
 	created, err := s.gateway.CreateWorklog(ctx, auth, draft)
 	if err != nil {
 		status := Rejected
@@ -134,9 +142,69 @@ func (s *Service) Record(
 		if errors.As(err, &classified) && classified.Uncertain() {
 			status = Uncertain
 		}
-		return Result{Status: status, Attempt: draft, Cause: err}, nil
+		return Result{Status: status, Attempt: draft, Cause: err}
 	}
-	return Result{Status: Submitted, Worklog: created}, nil
+	return Result{Status: Submitted, Worklog: created}
+}
+
+func (s *Service) ResolveTimerStart(
+	ctx context.Context,
+	auth Auth,
+	mode TimingMode,
+	explicitStart time.Time,
+	now time.Time,
+) (time.Time, error) {
+	if s.gateway == nil {
+		return time.Time{}, errors.New("Jira recording capability is unavailable")
+	}
+	if err := s.gateway.VerifyIdentity(ctx, auth); err != nil {
+		return time.Time{}, fmt.Errorf("verify configured Jira identity: %w", err)
+	}
+	if mode == EndingNow {
+		return now, nil
+	}
+	var start time.Time
+	switch mode {
+	case AtStart:
+		start = explicitStart
+		if start.IsZero() {
+			return time.Time{}, errors.New("explicit Running timer start must not be empty")
+		}
+	case AfterLast:
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		tomorrowStart := todayStart.AddDate(0, 0, 1)
+		existing, err := s.gateway.ListAuthoredWorklogs(ctx, auth, todayStart, tomorrowStart)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("find today's latest authored Worklog: %w", err)
+		}
+		start, err = latestAuthoredEndToday(existing, now)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !start.Before(now) {
+			return time.Time{}, errors.New("today's latest authored Worklog ends now or in the future; use --at or start now")
+		}
+	default:
+		return time.Time{}, errors.New("unsupported Running timer timing mode")
+	}
+	if start.After(now) {
+		return time.Time{}, errors.New("Running timer must not start in the future")
+	}
+	if start.Equal(now) {
+		return start, nil
+	}
+	interval, err := worklog.NewInterval(start, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	existing, err := s.gateway.ListAuthoredWorklogs(ctx, auth, start, now)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("check authored Worklog overlap: %w", err)
+	}
+	if err := validateNoOverlap(interval, existing); err != nil {
+		return time.Time{}, err
+	}
+	return start, nil
 }
 
 func (s *Service) resolveDraft(
@@ -179,17 +247,9 @@ func (s *Service) resolveDraft(
 		if err != nil {
 			return worklog.Draft{}, nil, fmt.Errorf("find today's latest authored Worklog: %w", err)
 		}
-		for _, candidate := range existing {
-			if candidate.Interval.Start().Before(todayStart) ||
-				!candidate.Interval.Start().Before(tomorrowStart) {
-				continue
-			}
-			if start.IsZero() || candidate.Interval.End().After(start) {
-				start = candidate.Interval.End()
-			}
-		}
-		if start.IsZero() {
-			return worklog.Draft{}, nil, ErrNoLatestWorklog
+		start, err = latestAuthoredEndToday(existing, now)
+		if err != nil {
+			return worklog.Draft{}, nil, err
 		}
 		if !start.Before(now) {
 			return worklog.Draft{}, nil, errors.New(
@@ -207,4 +267,32 @@ func (s *Service) resolveDraft(
 	return worklog.Draft{
 		Issue: request.Issue, Interval: interval, Description: request.Description,
 	}, existing, nil
+}
+
+func latestAuthoredEndToday(existing []worklog.Worklog, now time.Time) (time.Time, error) {
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	var latest time.Time
+	for _, candidate := range existing {
+		if candidate.Interval.Start().Before(todayStart) || !candidate.Interval.Start().Before(tomorrowStart) {
+			continue
+		}
+		if latest.IsZero() || candidate.Interval.End().After(latest) {
+			latest = candidate.Interval.End()
+		}
+	}
+	if latest.IsZero() {
+		return time.Time{}, ErrNoLatestWorklog
+	}
+	return latest, nil
+}
+
+func validateNoOverlap(interval worklog.Interval, existing []worklog.Worklog) error {
+	for _, candidate := range existing {
+		if interval.Overlaps(candidate.Interval) {
+			return fmt.Errorf("%w %q from %s to %s", ErrOverlap, candidate.ID,
+				candidate.Interval.Start().Format(time.RFC3339), candidate.Interval.End().Format(time.RFC3339))
+		}
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package recording_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,38 @@ func TestRecordAfterLastBeginsAtLatestAuthoredWorklogEnd(t *testing.T) {
 		!result.Worklog.Interval.Start().Equal(wantStart) ||
 		!result.Worklog.Interval.End().Equal(now) {
 		t.Errorf("result = %#v", result)
+	}
+}
+
+func TestResolveTimerStartUsesSharedLatestAndOverlapRules(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
+	latest := existingWorklog(t, "latest", now.Add(-2*time.Hour), now.Add(-time.Hour))
+	gateway := &fakeGateway{listed: []worklog.Worklog{latest}}
+	start, err := recording.New(gateway).ResolveTimerStart(
+		context.Background(), testAuth(), recording.AfterLast, time.Time{}, now,
+	)
+	if err != nil || !start.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("ResolveTimerStart() = %v, %v", start, err)
+	}
+
+	overlap := existingWorklog(t, "overlap", now.Add(-45*time.Minute), now.Add(-15*time.Minute))
+	gateway.listed = []worklog.Worklog{overlap}
+	_, err = recording.New(gateway).ResolveTimerStart(
+		context.Background(), testAuth(), recording.AtStart, now.Add(-time.Hour), now,
+	)
+	if !errors.Is(err, recording.ErrOverlap) {
+		t.Fatalf("ResolveTimerStart(overlap) error = %v", err)
+	}
+
+	endingNow := existingWorklog(t, "ending-now", now.Add(-time.Hour), now)
+	gateway.listed = []worklog.Worklog{endingNow}
+	_, err = recording.New(gateway).ResolveTimerStart(
+		context.Background(), testAuth(), recording.AfterLast, time.Time{}, now,
+	)
+	if err == nil || !strings.Contains(err.Error(), "ends now or in the future") {
+		t.Fatalf("ResolveTimerStart(ending now) error = %v", err)
 	}
 }
 
