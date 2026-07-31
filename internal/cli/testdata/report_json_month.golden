@@ -1,0 +1,181 @@
+{
+  "schema": "clock.report.v1",
+  "selector": {
+    "type": "preset",
+    "value": "last_month"
+  },
+  "window": {
+    "from": "2026-06-01T00:00:00+02:00",
+    "to": "2026-07-01T00:00:00+02:00",
+    "timezone": "Europe/Prague"
+  },
+  "contributions": [
+    {
+      "worklog_id": "10005",
+      "issue": {
+        "key": "CLOCK-16",
+        "summary": "Reports"
+      },
+      "description": "Monthly summary",
+      "from": "2026-06-02T09:00:00+02:00",
+      "to": "2026-06-02T10:30:00+02:00",
+      "seconds": 5400
+    }
+  ],
+  "daily_totals": [
+    {
+      "date": "2026-06-01",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-02",
+      "seconds": 5400,
+      "earnings_czk": "1125.00"
+    },
+    {
+      "date": "2026-06-03",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-04",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-05",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-06",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-07",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-08",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-09",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-10",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-11",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-12",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-13",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-14",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-15",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-16",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-17",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-18",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-19",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-20",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-21",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-22",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-23",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-24",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-25",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-26",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-27",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-28",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-29",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    },
+    {
+      "date": "2026-06-30",
+      "seconds": 0,
+      "earnings_czk": "0.00"
+    }
+  ],
+  "total": {
+    "seconds": 5400,
+    "earnings_czk": "1125.00"
+  }
+}
