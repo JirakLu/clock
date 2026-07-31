@@ -48,3 +48,16 @@ Explicit bounds form a half-open `[from, to)` window and accept a local date,
 local minute-precise timestamp, or offset-bearing minute-precise timestamp.
 Terminal detail decreases from daily timelines to weekly ledgers and monthly
 aggregates; `--json` always emits the fully detailed `clock.report.v1` contract.
+
+## Running timer
+
+```text
+clock start <issue> [--at <start> | --after-last] [-d|--description <text>]
+clock status
+clock stop [--at <stop>] [-d|--description <text>]
+clock discard
+```
+
+One identity-bound Running timer is stored locally at a time. Stopping validates
+authored-Worklog overlap again, consumes local state before Jira submission, and
+preserves exact elapsed whole seconds. Discard never contacts Jira.
