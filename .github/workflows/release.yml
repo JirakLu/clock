@@ -152,31 +152,33 @@ jobs:
           test "$(extracted/clock --version)" = "clock ${TAG} (revision ${REVISION})"
           extracted/clock --help >/dev/null
 
-  live-jira:
-    name: Serialized live Jira integration
-    needs: artifact-smoke
-    runs-on: ubuntu-latest
-    concurrency:
-      group: clock-live-jira
-      cancel-in-progress: false
-    environment: live-jira
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
-          cache: true
-      - name: Create, read, and clean up a real Jira worklog
-        env:
-          CLOCK_LIVE_JIRA_SITE_URL: ${{ secrets.CLOCK_LIVE_JIRA_SITE_URL }}
-          CLOCK_LIVE_JIRA_EMAIL: ${{ secrets.CLOCK_LIVE_JIRA_EMAIL }}
-          CLOCK_LIVE_JIRA_TOKEN: ${{ secrets.CLOCK_LIVE_JIRA_TOKEN }}
-          CLOCK_LIVE_JIRA_ISSUE: ${{ secrets.CLOCK_LIVE_JIRA_ISSUE }}
-        run: go test -tags=livejira ./internal/jira -run '^TestLiveJiraCreateReadAndCleanup$' -count=1 -timeout=5m
+  # TODO: Uncomment once a disposable Jira deployment and the live-jira
+  # environment secrets are available.
+  # live-jira:
+  #   name: Serialized live Jira integration
+  #   needs: artifact-smoke
+  #   runs-on: ubuntu-latest
+  #   concurrency:
+  #     group: clock-live-jira
+  #     cancel-in-progress: false
+  #   environment: live-jira
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: "1.24.x"
+  #         cache: true
+  #     - name: Create, read, and clean up a real Jira worklog
+  #       env:
+  #         CLOCK_LIVE_JIRA_SITE_URL: ${{ secrets.CLOCK_LIVE_JIRA_SITE_URL }}
+  #         CLOCK_LIVE_JIRA_EMAIL: ${{ secrets.CLOCK_LIVE_JIRA_EMAIL }}
+  #         CLOCK_LIVE_JIRA_TOKEN: ${{ secrets.CLOCK_LIVE_JIRA_TOKEN }}
+  #         CLOCK_LIVE_JIRA_ISSUE: ${{ secrets.CLOCK_LIVE_JIRA_ISSUE }}
+  #       run: go test -tags=livejira ./internal/jira -run '^TestLiveJiraCreateReadAndCleanup$' -count=1 -timeout=5m
 
   publish:
     name: Publish GitHub Release
-    needs: [quality, race, artifact-smoke, live-jira]
+    needs: [quality, race, artifact-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
