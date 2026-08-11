@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestCompiledClockCrashAfterConsumptionLeavesNoRetryState(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build error = %v\n%s", err, output)
 	}
-	configRoot := t.TempDir()
+	configRoot, environment := isolatedConfigEnvironment(t)
 	now := time.Now().UTC()
 	store := runningtimer.NewStore(configRoot)
 	if err := store.Create(runningtimer.Timer{Issue: "CLOCK-14", StartedAt: now.Add(-time.Hour), CloudID: "cloud", AccountID: "account"}, now); err != nil {
@@ -106,7 +107,7 @@ hourly_rate_czk = "750.00"
 		t.Fatal(err)
 	}
 	command := exec.Command(executable, "stop")
-	command.Env = append(os.Environ(), "XDG_CONFIG_HOME="+configRoot, "TZ=UTC", "CLOCK_TEST_GATEWAY_URL="+server.URL)
+	command.Env = append(environment, "TZ=UTC", "CLOCK_TEST_GATEWAY_URL="+server.URL)
 	var commandOutput bytes.Buffer
 	command.Stdout = &commandOutput
 	command.Stderr = &commandOutput
@@ -139,7 +140,7 @@ func TestCompiledBinaryRunsLocalTimerStatusAndDiscard(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build error = %v\n%s", err, output)
 	}
-	configRoot := t.TempDir()
+	configRoot, environment := isolatedConfigEnvironment(t)
 	now := time.Now().UTC()
 	store := runningtimer.NewStore(configRoot)
 	if err := store.Create(runningtimer.Timer{
@@ -160,7 +161,7 @@ hourly_rate_czk = "750.00"
 	if err := os.WriteFile(filepath.Join(configRoot, "clock", "config.toml"), []byte(configuration), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	environment := append(os.Environ(), "XDG_CONFIG_HOME="+configRoot, "TZ=UTC")
+	environment = append(environment, "TZ=UTC")
 	status := exec.Command(executable, "status")
 	status.Env = environment
 	output, err := status.CombinedOutput()
@@ -173,4 +174,14 @@ hourly_rate_czk = "750.00"
 	if err != nil || !strings.Contains(string(output), "No Jira Worklog was created") {
 		t.Fatalf("clock discard = %v\n%s", err, output)
 	}
+}
+
+func isolatedConfigEnvironment(t *testing.T) (string, []string) {
+	t.Helper()
+
+	root := t.TempDir()
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(root, "Library", "Application Support"), append(os.Environ(), "HOME="+root)
+	}
+	return root, append(os.Environ(), "XDG_CONFIG_HOME="+root)
 }
