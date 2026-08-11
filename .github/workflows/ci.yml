@@ -61,3 +61,25 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build -trimpath -o clock-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clock
+
+  native-smoke:
+    name: Native compiled-binary smoke (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Run compiled-binary smoke tests
+        env:
+          CGO_ENABLED: "0"
+          TZ: UTC
+        run: go test ./cmd/clock -run '^TestCompiledBinary'
