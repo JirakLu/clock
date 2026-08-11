@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-tag:
+    name: Validate SemVer tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a SemVer release or release-candidate tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]]; then
+            echo "Tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N" >&2
+            exit 1
+          fi
+
+  quality:
+    name: Format, vet, and test
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+
+  race:
+    name: Linux race detection
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - run: go test -race ./...
+
+  package:
+    name: Package ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Build self-contained binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.ref_name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir staging
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=$TAG -X main.revision=$REVISION" \
+            -o staging/clock ./cmd/clock
+          cp README.md staging/README.md
+      - name: Create reproducible archive
+        env:
+          TAG: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          epoch=$(git show -s --format=%ct "$GITHUB_SHA")
+          archive="clock_${TAG}_${GOOS}_${GOARCH}.tar.gz"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$epoch" -C staging -cf - README.md clock \
+            | gzip -n > "$archive"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clock-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: clock_*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    name: Generate checksums
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clock-*
+          merge-multiple: true
+      - name: Create SHA-256 checksum file
+        env:
+          TAG: ${{ github.ref_name }}
+        run: sha256sum clock_*.tar.gz > "clock_${TAG}_checksums.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: clock_*_checksums.txt
+          if-no-files-found: error
+
+  artifact-smoke:
+    name: Verify extracted artifact (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [package, checksums]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, runner: ubuntu-latest }
+          - { goos: linux, goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: amd64, runner: macos-13 }
+          - { goos: darwin, goarch: arm64, runner: macos-14 }
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clock-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+      - name: Verify checksum, metadata, and startup
+        env:
+          TAG: ${{ github.ref_name }}
+          REVISION: ${{ github.sha }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          archive="clock_${TAG}_${GOOS}_${GOARCH}.tar.gz"
+          expected=$(grep "  ${archive}$" "clock_${TAG}_checksums.txt" | cut -d ' ' -f 1)
+          if command -v sha256sum >/dev/null; then
+            actual=$(sha256sum "$archive" | cut -d ' ' -f 1)
+          else
+            actual=$(shasum -a 256 "$archive" | cut -d ' ' -f 1)
+          fi
+          test "$actual" = "$expected"
+          mkdir extracted
+          tar -xzf "$archive" -C extracted
+          test "$(extracted/clock --version)" = "clock ${TAG} (revision ${REVISION})"
+          extracted/clock --help >/dev/null
+
+  live-jira:
+    name: Serialized live Jira integration
+    needs: artifact-smoke
+    runs-on: ubuntu-latest
+    concurrency:
+      group: clock-live-jira
+      cancel-in-progress: false
+    environment: live-jira
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Create, read, and clean up a real Jira worklog
+        env:
+          CLOCK_LIVE_JIRA_SITE_URL: ${{ secrets.CLOCK_LIVE_JIRA_SITE_URL }}
+          CLOCK_LIVE_JIRA_EMAIL: ${{ secrets.CLOCK_LIVE_JIRA_EMAIL }}
+          CLOCK_LIVE_JIRA_TOKEN: ${{ secrets.CLOCK_LIVE_JIRA_TOKEN }}
+          CLOCK_LIVE_JIRA_ISSUE: ${{ secrets.CLOCK_LIVE_JIRA_ISSUE }}
+        run: go test -tags=livejira ./internal/jira -run '^TestLiveJiraCreateReadAndCleanup$' -count=1 -timeout=5m
+
+  publish:
+    name: Publish GitHub Release
+    needs: [quality, race, artifact-smoke, live-jira]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clock-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=()
+          if [[ "$TAG" == *-* ]]; then prerelease+=(--prerelease); fi
+          gh release create "$TAG" clock_*.tar.gz clock_*_checksums.txt \
+            --verify-tag --generate-notes "${prerelease[@]}" \
+            --notes "macOS artifacts are currently unsigned and are not notarized."
